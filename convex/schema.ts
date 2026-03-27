@@ -469,42 +469,26 @@ export default defineSchema({
 
   billings: defineTable({
     userId: v.id("users"),
-
-    amountCents: v.number(),
-    gstCents: v.number(),
+    listingId: v.optional(v.id("listings")),
+    feeRuleId: v.id("feeRules"),
+    feeType: billingType,
+    feeCode: v.string(),
+    feeCents: v.number(),
+    gstPercent: v.number(),
     totalCents: v.number(),
-
-    paymentStatus: paymentStatus,
+    currency: v.string(),
     paymentProvider: v.string(),
     paymentProviderTransactionId: v.optional(v.string()),
-    paymentMethod: v.optional(v.string()),
-
-    billingType: billingType,
-    referenceId: v.string(), // listingId or brandingBookingId serialized
-    description: v.string(),
+    paymentStatus: paymentStatus,
     idempotencyKey: v.string(),
-
-    invoiceNumber: v.optional(v.string()),
-    invoiceUrl: v.optional(v.string()),
-    receiptUrl: v.optional(v.string()),
-
-    paidAt: v.optional(v.number()),
-    paymentErrorDetails: v.optional(v.string()),
-    refundedAt: v.optional(v.number()),
-    refundReason: v.optional(v.string()),
-
-    ...timestamps,
+    createdAt: v.number(),
+    updatedAt: v.number(),
   })
     .index("by_userId", ["userId"])
-    .index("by_paymentStatus", ["paymentStatus"])
-    .index("by_paymentProviderTransactionId", ["paymentProviderTransactionId"])
-    .index("by_billingType", ["billingType"])
-    .index("by_referenceId", ["referenceId"])
-    .index("by_billingType_referenceId", ["billingType", "referenceId"])
-    .index("by_idempotencyKey", ["idempotencyKey"])
-    .index("by_paidAt", ["paidAt"]),
+    .index("by_listingId", ["listingId"])
+    .index("by_listingId_paymentStatus", ["listingId", "paymentStatus"]),
 
-  feeRules: defineTable({
+      feeRules: defineTable({
     feeCode: v.string(),
     feeType: feeType,
 
@@ -599,21 +583,19 @@ export default defineSchema({
     .index("by_userId_isRead", ["userId", "isRead"])
     .index("by_entityType_entityId", ["entityType", "entityId"]),
 
-  mediaAssets: defineTable({
-    storageId: v.string(),
-    ownerUserId: v.id("users"),
-    entityType: v.optional(entityType),
-    entityId: v.optional(v.string()),
-    fileType: v.string(),
-    url: v.optional(v.string()),
-    altText: v.optional(v.string()),
-    width: v.optional(v.number()),
-    height: v.optional(v.number()),
-    ...timestamps,
-  })
-    .index("by_storageId", ["storageId"])
-    .index("by_ownerUserId", ["ownerUserId"])
-    .index("by_entityType_entityId", ["entityType", "entityId"]),
+    mediaAssets: defineTable({
+      userId: v.id("users"),
+      storageId: v.id("_storage"),
+      fileName: v.string(),
+      contentType: v.string(),
+      sizeBytes: v.number(),
+      altText: v.optional(v.string()),
+      title: v.optional(v.string()),
+      createdAt: v.number(),
+      updatedAt: v.number(),
+    })
+      .index("by_userId", ["userId"])
+      .index("by_storageId", ["storageId"]),
 
   auditLogs: defineTable({
     userId: v.optional(v.id("users")),

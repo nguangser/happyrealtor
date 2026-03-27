@@ -1,19 +1,9 @@
 import { mutation } from "../../_generated/server";
 import { v } from "convex/values";
 import { logger } from "../../../lib/telemetry/logger";
+import { isValidSingaporeMobile } from "../../lib/validation";
 import { now } from "../../lib/time";
 import { slugify, ensureUniqueListingSlug } from "../../lib/listings";
-import { assertOwner } from "../../lib/access";
-import {
-  validateListingPricing,
-  validateListingContactNumbers,
-} from "../../lib/listingValidation";
-import { createNotification } from "../../lib/notifications";
-import {
-  assertBillingPaid,
-  calculateListingExpiry,
-  calculateNextListingRefresh,
-} from "../../lib/billings";
 
 export const createDraft = mutation({
   args: {
@@ -72,16 +62,27 @@ export const createDraft = mutation({
       throw new Error("Account is not active");
     }
 
-    validateListingPricing({
-      isNewProject: args.isNewProject,
-      isPriceOnAsk: args.isPriceOnAsk,
-      askPrice: args.askPrice,
-    });
+    if (args.isPriceOnAsk && !args.isNewProject) {
+      throw new Error("Price on ask is only allowed for new projects");
+    }
 
-    validateListingContactNumbers({
-      contactMobileNumber: args.contactMobileNumber,
-      contactWhatsappNumber: args.contactWhatsappNumber,
-    });
+    if (!args.isPriceOnAsk && !args.askPrice) {
+      throw new Error("Ask price is required unless price on ask is enabled");
+    }
+
+    if (
+      args.contactMobileNumber &&
+      !isValidSingaporeMobile(args.contactMobileNumber)
+    ) {
+      throw new Error("Invalid contact mobile number");
+    }
+
+    if (
+      args.contactWhatsappNumber &&
+      !isValidSingaporeMobile(args.contactWhatsappNumber)
+    ) {
+      throw new Error("Invalid WhatsApp number");
+    }
 
     const ts = now();
     const slug = await ensureUniqueListingSlug(ctx, slugify(args.title));
@@ -150,6 +151,21 @@ export const updateDraft = mutation({
     userId: v.id("users"),
     title: v.optional(v.string()),
     description: v.optional(v.string()),
+    propertyCategory: v.optional(
+      v.union(
+        v.literal("residential"),
+        v.literal("commercial"),
+        v.literal("industrial"),
+        v.literal("land"),
+      ),
+    ),
+    streetName: v.optional(v.string()),
+    address: v.optional(v.string()),
+    postalCode: v.optional(v.string()),
+    floorArea: v.optional(v.number()),
+    floorAreaUnit: v.optional(v.string()),
+    bedrooms: v.optional(v.number()),
+    bathrooms: v.optional(v.number()),
     askPrice: v.optional(v.number()),
     isPriceOnAsk: v.optional(v.boolean()),
     isNewProject: v.optional(v.boolean()),
@@ -160,12 +176,15 @@ export const updateDraft = mutation({
     contactName: v.optional(v.string()),
     contactMobileNumber: v.optional(v.string()),
     contactWhatsappNumber: v.optional(v.string()),
+    mrtStation: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const listing = await ctx.db.get(args.listingId);
     if (!listing) throw new Error("Listing not found");
 
-    assertOwner(String(listing.userId), String(args.userId));
+    if (String(listing.userId) !== String(args.userId)) {
+      throw new Error("Not allowed to edit this listing");
+    }
 
     if (listing.status !== "draft" && listing.status !== "pending_payment") {
       throw new Error("Only draft or pending payment listings can be edited");
@@ -175,20 +194,30 @@ export const updateDraft = mutation({
     const nextIsPriceOnAsk = args.isPriceOnAsk ?? listing.isPriceOnAsk;
     const nextAskPrice = args.askPrice ?? listing.askPrice;
 
-    validateListingPricing({
-      isNewProject: nextIsNewProject,
-      isPriceOnAsk: nextIsPriceOnAsk,
-      askPrice: nextAskPrice ?? undefined,
-    });
+    if (nextIsPriceOnAsk && !nextIsNewProject) {
+      throw new Error("Price on ask is only allowed for new projects");
+    }
 
-    validateListingContactNumbers({
-      contactMobileNumber: args.contactMobileNumber,
-      contactWhatsappNumber: args.contactWhatsappNumber,
-    });
+    if (!nextIsPriceOnAsk && !nextAskPrice) {
+      throw new Error("Ask price is required unless price on ask is enabled");
+    }
 
-    const ts = now();
+    if (
+      args.contactMobileNumber &&
+      !isValidSingaporeMobile(args.contactMobileNumber)
+    ) {
+      throw new Error("Invalid contact mobile number");
+    }
+
+    if (
+      args.contactWhatsappNumber &&
+      !isValidSingaporeMobile(args.contactWhatsappNumber)
+    ) {
+      throw new Error("Invalid WhatsApp number");
+    }
+
     const patch: Record<string, unknown> = {
-      updatedAt: ts,
+      updatedAt: now(),
     };
 
     if (args.title !== undefined) {
@@ -196,6 +225,18 @@ export const updateDraft = mutation({
       patch.slug = await ensureUniqueListingSlug(ctx, slugify(args.title));
     }
     if (args.description !== undefined) patch.description = args.description;
+    if (args.propertyCategory !== undefined) {
+      patch.propertyCategory = args.propertyCategory;
+    }
+    if (args.streetName !== undefined) patch.streetName = args.streetName;
+    if (args.address !== undefined) patch.address = args.address;
+    if (args.postalCode !== undefined) patch.postalCode = args.postalCode;
+    if (args.floorArea !== undefined) patch.floorArea = args.floorArea;
+    if (args.floorAreaUnit !== undefined) {
+      patch.floorAreaUnit = args.floorAreaUnit;
+    }
+    if (args.bedrooms !== undefined) patch.bedrooms = args.bedrooms;
+    if (args.bathrooms !== undefined) patch.bathrooms = args.bathrooms;
     if (args.askPrice !== undefined) patch.askPrice = args.askPrice;
     if (args.isPriceOnAsk !== undefined) patch.isPriceOnAsk = args.isPriceOnAsk;
     if (args.isNewProject !== undefined) patch.isNewProject = args.isNewProject;
@@ -210,6 +251,11 @@ export const updateDraft = mutation({
     if (args.contactWhatsappNumber !== undefined) {
       patch.contactWhatsappNumber = args.contactWhatsappNumber;
     }
+    if (args.mrtStation !== undefined) patch.mrtStation = args.mrtStation;
+
+    if ((args.isPriceOnAsk ?? listing.isPriceOnAsk) === true) {
+      patch.askPrice = undefined;
+    }
 
     await ctx.db.patch(args.listingId, patch);
 
@@ -219,6 +265,36 @@ export const updateDraft = mutation({
     });
 
     return { ok: true };
+  },
+});
+
+export const deleteDraft = mutation({
+  args: {
+    listingId: v.id("listings"),
+    userId: v.id("users"),
+  },
+  handler: async (ctx, args) => {
+    const listing = await ctx.db.get(args.listingId);
+    if (!listing) throw new Error("Listing not found");
+
+    if (String(listing.userId) !== String(args.userId)) {
+      throw new Error("Not allowed");
+    }
+
+    if (listing.status !== "draft") {
+      throw new Error("Only draft listings can be deleted");
+    }
+
+    const imageIds = listing.imageIds ?? [];
+    const coverImageId = listing.coverImageId;
+
+    await ctx.db.delete(args.listingId);
+
+    return {
+      ok: true,
+      deletedImageIds: imageIds,
+      deletedCoverImageId: coverImageId,
+    };
   },
 });
 
@@ -232,18 +308,27 @@ export const submitForPayment = mutation({
     const listing = await ctx.db.get(args.listingId);
     if (!listing) throw new Error("Listing not found");
 
-    assertOwner(String(listing.userId), String(args.userId));
+    if (String(listing.userId) !== String(args.userId)) {
+      throw new Error("Not allowed");
+    }
 
     if (listing.status !== "draft") {
       throw new Error("Only draft listings can be submitted for payment");
     }
 
-    const ts = now();
+    const feeRule = await ctx.db.get(args.feeRuleId);
+    if (!feeRule) {
+      throw new Error("Fee rule not found");
+    }
+
+    if (!feeRule.isActive) {
+      throw new Error("Fee rule is not active");
+    }
 
     await ctx.db.patch(args.listingId, {
       status: "pending_payment",
       feeRuleId: args.feeRuleId,
-      updatedAt: ts,
+      updatedAt: now(),
     });
 
     logger.info("Listing submitted for payment", {
@@ -271,31 +356,34 @@ export const publishAfterPayment = mutation({
     const billing = await ctx.db.get(args.billingId);
     if (!billing) throw new Error("Billing not found");
 
-    assertBillingPaid(billing);
+    if (billing.paymentStatus !== "paid") {
+      throw new Error("Billing is not paid");
+    }
 
     const ts = now();
-    const expiresAt = calculateListingExpiry(ts);
-    const nextRefreshAt = calculateNextListingRefresh(ts);
+    const expiresAt = ts + 30 * 24 * 60 * 60 * 1000;
 
     await ctx.db.patch(args.listingId, {
       status: "published",
       billingId: args.billingId,
       publishedAt: ts,
       lastRefreshAt: ts,
-      nextRefreshAt,
+      nextRefreshAt: ts + 6 * 60 * 60 * 1000,
       expiresAt,
       isSearchIndexed: false,
       updatedAt: ts,
     });
 
-    await createNotification(ctx, {
+    await ctx.db.insert("notifications", {
       userId: listing.userId,
       type: "listing_published",
       title: "Listing published",
       message: `${listing.title} is now live.`,
       entityType: "listing",
       entityId: String(args.listingId),
+      isRead: false,
       createdAt: ts,
+      updatedAt: ts,
     });
 
     logger.info("Listing published after payment", {
@@ -317,13 +405,13 @@ export const deactivateListing = mutation({
     const listing = await ctx.db.get(args.listingId);
     if (!listing) throw new Error("Listing not found");
 
-    assertOwner(String(listing.userId), String(args.userId));
-
-    const ts = now();
+    if (String(listing.userId) !== String(args.userId)) {
+      throw new Error("Not allowed");
+    }
 
     await ctx.db.patch(args.listingId, {
       status: "deactivated",
-      updatedAt: ts,
+      updatedAt: now(),
     });
 
     logger.info("Listing deactivated", {
